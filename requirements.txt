@@ -1,0 +1,10 @@
+Flask
+Flask-Session
+twilio
+python-dotenv
+openai
+requests
+flask-cors
+groq
+fpdf
+livereload
