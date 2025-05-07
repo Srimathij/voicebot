@@ -8,3 +8,4 @@ flask-cors
 groq
 fpdf
 livereload
+gunicorn
