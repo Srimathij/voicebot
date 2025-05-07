@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from flask_cors import CORS
 import requests
 from groq import Groq
+import re
+
 
 
 # Load .env variables
@@ -30,6 +32,14 @@ app.secret_key = 'outboundcalls'
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
 Session(app)
+from flask import Flask
+# from flask_cors import CORS
+
+# app = Flask(__name__)
+# # ← this will add the necessary Access‑Control‑* headers
+# #     and respond to OPTIONS on all routes
+# CORS(app)
+
 
 # Twilio & OpenAI config
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
@@ -63,28 +73,29 @@ def is_before_due(due_date):
 
 @app.route('/trigger-call', methods=['POST'])
 def trigger_call():
-    data = request.get_json()
+    data      = request.get_json()
     to_number = data.get('phone')
-    name = data.get('name')
-    plan = data.get('plan')
-    due_date = data.get('dueDate')
-    amount = data.get('amount')
-    policy = data.get('policy')
-    currency = data.get('currency')
-    last_4 = policy[-4:] if policy else "****"
+    name      = data.get('name')
+    plan      = data.get('plan')
+    due_date  = data.get('dueDate')
+    amount    = data.get('amount')
+    policy    = data.get('policy')
+    currency  = data.get('currency')
 
+    # ensure policy is a string so we can slice
+    policy_str = str(policy or "")
+    last_4     = policy_str[-4:] if len(policy_str) >= 4 else policy_str or "****"
+
+    # build the voicebot URL
     query = urllib.parse.urlencode({
-        "name": name,
-        "plan_name": plan,
-        "due_date": due_date,
+        "name":           name,
+        "plan_name":      plan,
+        "due_date":       due_date,
         "premium_amount": amount,
-        "last_4_digit": last_4,
-        "currency": currency
+        "last_4_digit":   last_4,
+        "currency":       currency
     })
-    voicebot_url = f"https://7081-157-49-97-197.ngrok-free.app/voicebot?{query}"
-
-    print("[INFO] Attempting call to:", to_number)
-    print("[INFO] Voicebot URL:", voicebot_url)
+    voicebot_url = f"https://64c3-157-49-99-180.ngrok-free.app/voicebot?{query}"
 
     try:
         call = twilio_client.calls.create(
@@ -98,29 +109,28 @@ def trigger_call():
             status_callback_event=["completed"]
         )
 
-
-
-        print("[SUCCESS] Call triggered. SID:", call.sid)
-
+        # 🔥 Record it in call_log for later reporting/transcript lookup
         call_log.append({
-            "sid": call.sid,
-            "timestamp": datetime.now().isoformat(),
-            "phone": to_number,
-            "policy": policy,
-            "status": "completed",
-            "duration": 1,
-            "recordingUrl": None,
-            "name": name  # ✅ Add this line
-
+            "sid":          call.sid,
+            "timestamp":    datetime.now().isoformat(),
+            "name":         name,
+            "plan":         plan,
+            "due_date":     due_date,
+            "amount":       amount,
+            "policy":       policy,
+            "currency":     currency,
+            "last_4_digit": last_4,
+            "phone":        to_number,
+            "status":       "queued",
+            "duration":     0,
+            "recordingUrl": None
         })
-
 
         return jsonify({'message': 'Call triggered', 'sid': call.sid})
 
     except Exception as e:
-        print("[ERROR] Twilio call failed:", e)
+        print("[ERROR] trigger_call:", e)
         return jsonify({'error': str(e)}), 500
-    
 
 #####status
 
@@ -148,66 +158,113 @@ def call_status():
 import glob
 from datetime import datetime
 from flask import jsonify, send_file
-from fpdf import FPDF
+# from fpdf import FPDF
+import os
+import glob
+from datetime import datetime
+from io import BytesIO
+
+
+from flask import jsonify, send_file
+import pandas as pd
+from openpyxl import Workbook  # for pandas ExcelWriter
+
+from io import BytesIO
+import pandas as pd
+import glob, os
+from datetime import datetime
+from flask import jsonify, send_file, session
+
+from datetime import datetime
+import glob, os
+from io import BytesIO
+from flask import jsonify, send_file
 
 @app.route("/generate-report", methods=["POST"])
 def generate_report():
-    data = request.get_json()
-    start = datetime.strptime(data['startDate'], '%Y-%m-%d').date()
-    end = datetime.strptime(data['endDate'], '%Y-%m-%d').date()
-    rpt_type = data["reportType"]
+    try:
+        data     = request.get_json()
+        start    = datetime.strptime(data['startDate'], '%Y-%m-%d').date()
+        end      = datetime.strptime(data['endDate'],   '%Y-%m-%d').date()
+        rpt_type = data.get("reportType", "Report")
 
-    # collect recordings in range
-    recs = []
-    for path in glob.glob("recordings/*.mp3"):
-        fname = os.path.basename(path)
-        sid, datepart, _ = fname.split("_", 2)
-        file_date = datetime.strptime(datepart, "%m-%d-%Y").date()
-        if start <= file_date <= end:
-            entry = next((c for c in call_log if c["sid"] == sid), {})
-            recs.append({**entry, "file": path})
+        print(f"[DEBUG] Requested date range: {start} → {end}")
 
-    if not recs:
-        return jsonify({"error": "No recordings found"}), 404
+        rows = []
+        for path in glob.glob("recordings/*.*"):
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in (".mp3", ".wav"):
+                continue
 
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(0, 10, f"{rpt_type.capitalize()} from {start} to {end}", ln=True, align='C')
-    pdf.ln(5)
+            fname = os.path.basename(path)
+            base, _ = os.path.splitext(fname)
+            parts   = base.split("_")
 
-    customer_idx = 1
-    for r in recs:
-        # Build your display label
-        display_label = r.get('name') or r.get('phone') or r.get('sid') 
+            # Expect at least 3 parts: [callSid, MM-DD-YYYY, HH-MM-SS]
+            if len(parts) < 3:
+                print(f"[DEBUG] Skipping unexpected filename: {fname}")
+                continue
 
-        # Print “Customer 1:”, “Customer 2:”, etc.
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 8, f"Customer {customer_idx}: {display_label}", ln=True)
+            call_sid = parts[0]
+            date_str = parts[1]
 
-        # … rest of loop …
-        customer_idx += 1
+            # parse only the date portion
+            try:
+                file_date = datetime.strptime(date_str, "%m-%d-%Y").date()
+            except ValueError as e:
+                print(f"[DEBUG] Invalid date in filename {fname}: {e}")
+                continue
 
-        pdf.set_font("Arial", '', 10)
+            print(f"[DEBUG] File {fname} → date {file_date}")
 
-        # Using transcription for summaries
-        transcript = transcribe_audio(r["file"])
-        summary = summarize_with_groq(transcript)
+            # date filter
+            if not (start <= file_date <= end):
+                continue
 
-        # Adding the formatted summary
-        pdf.set_font("Arial", 'B', 10)
-        pdf.cell(0, 8, "Summary:", ln=True)
-        pdf.set_font("Arial", '', 10)
-        pdf.multi_cell(0, 6, summary)
-        
-        pdf.ln(5)
+            # lookup by call SID
+            entry = next((c for c in call_log if c.get("sid") == call_sid), None)
+            if not entry:
+                print(f"[DEBUG] No call_log entry for SID {call_sid}")
+                continue
 
-    # Save PDF
-    os.makedirs("reports", exist_ok=True)
-    out = f"reports/report_{start}_{end}.pdf"
-    pdf.output(out)
+            name         = entry.get("name", "Customer")
+            last_4_digit = entry.get("last_4_digit", "****")
 
-    return send_file(out, as_attachment=True)
+            summary = summarize_with_groq(
+                          transcribe_audio(path),
+                          name,
+                          last_4_digit
+                      )
+
+            rows.append({
+                "Customer Name": name,
+                "Policy Number": last_4_digit,
+                "Due Date":      file_date.strftime("%Y-%m-%d"),
+                "Actions":       summary
+            })
+
+        print(f"[DEBUG] Total rows collected: {len(rows)}")
+
+        if not rows:
+            return jsonify({"error": "No recordings found"}), 404
+
+        # build and send Excel
+        df     = pd.DataFrame(rows, columns=["Customer Name","Policy Number","Due Date","Actions"])
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name=rpt_type)
+        output.seek(0)
+
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=f"{rpt_type}_{start}_{end}.xlsx"
+        )
+
+    except Exception as e:
+        print("[ERROR] Report generation failed:", e)
+        return jsonify({"error": str(e)}), 500
 
 #####llm####
 
@@ -249,11 +306,39 @@ def download_recordings():
     )
 
 
-# ————— Helpers —————
+#####trans
+
+import os
+import glob
+import io
+import zipfile
+from datetime import datetime
+from flask import jsonify, send_file
+from fpdf import FPDF
+
+import os
+import glob
+import io
+import zipfile
+from datetime import datetime
+from flask import jsonify, send_file
+from fpdf import FPDF
+
+import os
+import glob
+import io
+import zipfile
+from datetime import datetime
+from flask import jsonify, send_file, request, session
+from fpdf import FPDF
+
+# ── 1) Verbose transcription helper ────────────────────────────────────────────
+
 def transcribe_audio(filepath):
-    """Transcribe an MP3 file using Groq Whisper."""
+    """
+    Transcribe an MP3 file using Groq Whisper (verbose JSON).
+    """
     try:
-        # use basename directly
         filename = os.path.basename(filepath)
         with open(filepath, "rb") as f:
             resp = client.audio.transcriptions.create(
@@ -261,25 +346,137 @@ def transcribe_audio(filepath):
                 model="whisper-large-v3",
                 response_format="verbose_json"
             )
-        return resp.text
+        return resp
     except Exception as e:
         print(f"[❌] Transcription failed for {filepath}: {e}")
-        return ""
+        return None
 
-def summarize_with_groq(text):
+# ── Extract Customer Name ───────────────────────────────────────────────────────
+
+def extract_customer_name(transcript_text):
+    """
+    Extract customer name from lines like: "May I speak to Srimathi please?"
+    """
+    pattern = re.compile(
+        r"may\s+i\s+speak\s+to\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)(?:,?\s+please)?\??",
+        re.IGNORECASE
+    )
+    for line in transcript_text.splitlines():
+        if line.strip().startswith("Ava:"):
+            match = pattern.search(line)
+            if match:
+                return match.group(1).strip().title()
+    return None
+
+# ── Build Transcript with Labels ────────────────────────────────────────────────
+
+def build_labeled_dialog(whisper_json):
+    """
+    Label dialog alternately as Ava / Customer based on segments.
+    """
+    segments = getattr(whisper_json, "segments", []) or []
+    speaker = "Ava"
+    lines = []
+    for seg in segments:
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        lines.append(f"{speaker}: {text}")
+        speaker = "Customer" if speaker == "Ava" else "Ava"
+    return "\n".join(lines)
+
+# ── Transcript Download Endpoint ────────────────────────────────────────────────
+
+@app.route("/download-transcript", methods=["POST"])
+def download_transcripts():
+    data = request.get_json() or {}
+    start = datetime.strptime(data.get('startDate', ''), '%Y-%m-%d').date()
+    end = datetime.strptime(data.get('endDate', ''), '%Y-%m-%d').date()
+
+    mp3_files = []
+    for path in glob.glob("recordings/**/*.mp3", recursive=True):
+        fname = os.path.basename(path)
+        try:
+            sid, datep, _ = fname.split("_", 2)
+            file_date = datetime.strptime(datep, "%m-%d-%Y").date()
+            if start <= file_date <= end:
+                mp3_files.append(path)
+        except ValueError:
+            continue
+
+    if not mp3_files:
+        return jsonify({"error": "No recordings found for transcripts"}), 404
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for mp3_path in mp3_files:
+            whisper_json = transcribe_audio(mp3_path)
+            if whisper_json:
+                transcript_text = build_labeled_dialog(whisper_json)
+            else:
+                transcript_text = "[No transcript available]"
+
+            customer_name = extract_customer_name(transcript_text) or "Customer"
+            personalized_text = transcript_text.replace("Customer:", f"{customer_name}:")
+
+            # Force speaker alternation for consistency
+            final_lines = []
+            speaker = "Ava"
+            for line in personalized_text.splitlines():
+                text = line.split(":", 1)[1].strip()
+                final_lines.append(f"{speaker}: {text}")
+                speaker = customer_name if speaker == "Ava" else "Ava"
+            final_transcript = "\n".join(final_lines)
+
+            # Render PDF
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.set_font("Arial", size=12)
+            for line in final_transcript.splitlines():
+                pdf.multi_cell(0, 8, line)
+
+            pdf_bytes = pdf.output(dest='S').encode('latin1')
+            pdf_name = os.path.basename(mp3_path).rsplit(".", 1)[0] + ".pdf"
+            zf.writestr(pdf_name, pdf_bytes)
+
+    zip_buffer.seek(0)
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f"transcripts_{start}_to_{end}.zip"
+    )
+
+def summarize_with_groq(text, name, last_4_digit):
     prompt = f"""
-    You are a professional call summarizer.  You will be given a transcript (which may be brief).  Produce a concise, polished summary in four sections:
+You are a professional call summarizer.
 
-    1. Opening – State the purpose of the call.  
-    2. Customer perspective – Describe what the customer said or asked.  
-    3. Key points & decisions – Summarize any main points, decisions or commitments.  
-    4. Action items – List any follow‑up steps, with responsible parties and due dates if known.
+You will be given a transcript of a customer call, the customer's name, and the last 4 digits of their policy number.
 
-    If the transcript is empty or contains no customer speech, simply note that the customer did not engage, but still fill out all four sections.  Do not ask for more transcript or repeat instructions.  
+🎯 Your task: Extract **only one actionable summary** of what the customer said or intended at the end of the call. Focus strictly on:
 
-    Transcript:
+- whether the customer plans to pay,
+- said they already paid,
+- declined,
+- asked for more info,
+- was the wrong person,
+- or did not engage at all.
 
+🛑 Do not summarize the full conversation.  
+✅ Only return the **next action or customer’s final intent**, as one short, clear sentence.
+
+If the customer said nothing or didn’t respond, return:  
+**“Customer did not respond or engage.”**
+
+Customer Name: {name}  
+Policy Number: {last_4_digit}  
+
+Transcript:
 {text}
+At the end of each call, produce **only** the follow-up action items—no JSON, no extra sections, just a simple list of actions in natural and understandable text.
+
+
 """
     resp = client.chat.completions.create(
         model="llama3-8b-8192",
@@ -295,17 +492,22 @@ def summarize_with_groq(text):
 @app.route('/recording-saved', methods=['POST'])
 def recording_saved():
     call_sid      = request.form['CallSid']
+    recording_sid = request.form['RecordingSid']
     recording_url = request.form['RecordingUrl']
-    duration      = request.form['RecordingDuration']    # seconds as string
+    duration      = request.form['RecordingDuration']
 
+    # download MP3
+    os.makedirs("recordings", exist_ok=True)
+    resp = requests.get(recording_url)
+    fname = f"recordings/{call_sid}_{datetime.now():%m-%d-%Y}.mp3"
+    with open(fname,"wb") as f: f.write(resp.content)
+
+    # update log
     for c in call_log:
-        if c['sid'] == call_sid:
-            c['recordingUrl'] = recording_url
-            c['duration']     = int(duration or 0)
+        if c['sid']==call_sid:
+            c.update(recordingUrl=recording_url, duration=int(duration), recording_sid=recording_sid)
             break
-
-    return ('', 204)
-
+    return ('',204)
 ######
 #     
     
@@ -378,18 +580,20 @@ def voicebot():
 def welcome():
     response = VoiceResponse()
     name = session.get('name', 'Customer')
-
     response.say(
         f"Greetings. This is Eva, your virtual assistant from Allianz PNB Life. "
         f"Just to let you know, you’re speaking with an AI, and this call may be recorded for quality and training purposes. "
         f"May I speak to {name} please?"
     )
 
+
+
+
     gather = Gather(
         action='/openaires',
         input='speech',
         speech_model='phone_call',
-        speechTimeout=1,
+        speechTimeout=0.2,
         actionOnEmptyResult=True
     )
     response.append(gather)
@@ -404,12 +608,12 @@ def welcome():
 def fallback():
     response = VoiceResponse()
     session['fallback_count'] += 1
-    if session['fallback_count'] >= 50:
+    if session['fallback_count'] >= 80:
         response.say("We're unable to hear you. We'll try again later. Goodbye.")
         response.hangup()
     else:
         gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                        speechTimeout=0.5, actionOnEmptyResult=True)
+                        speechTimeout=0.2, actionOnEmptyResult=True)
         response.append(gather)
     return str(response)
 
@@ -433,16 +637,39 @@ def chatbot_res():
     print(f"[USER] {name} said: {speech_result}")
 
     # End if user wants to exit
-    if any(kw in speech_result.lower() for kw in ['bye', 'goodbye', 'exit', 'hang up', 'nothing']):
-        goodbye_msg = f"My pleasure speaking with you, Mr./Ms. {name}. For other concerns, feel free to reach out to us via email at customercare@allianzpnblife.ph or call us at 8818-4357.Thank you for choosing Allianz PNB Life as your insurance partner. Have a good day ahead!"
-        print(f"[BOT] Ava replied: {goodbye_msg}")
+    # Exit keywords—including “thank you”/“thanks”
+    exit_keywords = [
+        'bye',
+        'goodbye',
+        'exit',
+        'hang up',
+        'nothing',
+        'thank you',
+        'thanks'
+    ]
+
+    # If user said any exit keyword, say goodbye and hang up immediately
+    if any(kw in speech_result for kw in exit_keywords):
+        name = session.get('name', 'Customer')
+        goodbye_msg = (
+            f"My pleasure speaking with you, Mr./Ms. {name}. "
+            "For other concerns, feel free to reach out to us via email at "
+            "customercare@allianzpnblife.ph or call us at 8818-4357. "
+            "Thank you for choosing Allianz PNB Life as your insurance partner. "
+            "Have a good day ahead!"
+        )
         response.say(goodbye_msg)
         response.hangup()
         return str(response)
 
+
     history = session.get('history', [])    
     prompt = f"""
-    You are a voice assistant for Allianz PNB Life, and your name is Ava. You assist users with their queries in a professional, natural, and dynamic manner based on the script provided. You act confidently and intelligently to interpret user responses and provide relevant information, especially about their premium payment status.
+
+        You are a voice assistant for Allianz PNB Life, and your name is Ava. You assist users with their queries in a professional, natural, and dynamic manner based on the script provided. You act confidently and intelligently to interpret user responses and provide relevant information, especially about their premium payment status.
+    🧩 IMPORTANT FORMAT NOTE:
+        When reading out policy numbers (or any numeric code), say each digit individually.  
+        For example, “5678” should be spoken as “five, six, seven, eight.”
 
     🧩 GENERAL PRINCIPLES:
     - Always be concise, friendly, and professional.
@@ -455,8 +682,8 @@ def chatbot_res():
 
     🧩 GREETING:
     - Start by saying
-        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {plan_name} policy with policy number ending in {last_4_digit}.
-        May we ask you to kindly pay your premium of {premium_amount} {cur} on or before {due_date} to keep your policy active and enjoy continuous coverage.Would you like to know more about payment options?"
+        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {plan_name} policy with policy number ending in {last_4_digit} (read as individual digits).  
+         May we ask you to kindly pay your premium of {premium_amount} {cur} on or before {due_date} to keep your policy active and enjoy continuous coverage? Would you like to know more about payment options?"
 
     If speaking to the policyowner:
     - Continue based on due date status (before or after due date).
@@ -514,7 +741,8 @@ def chatbot_res():
     - If user says they cannot pay now:
         - Respond:
             "I understand. May I ask why you’re unable to make the payment today? This will help me direct you to the right assistance."
-    """
+
+     """
 
     history.insert(0, {"role": "system", "content": prompt})
     history.append({"role": "user", "content": speech_result})
@@ -532,7 +760,7 @@ def chatbot_res():
 
     response.say(reply)
     gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                    speechTimeout=1, actionOnEmptyResult=True)
+                    speechTimeout=0.2, actionOnEmptyResult=True)
     response.append(gather)
     return str(response)
 
