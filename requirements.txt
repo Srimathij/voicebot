@@ -9,3 +9,5 @@ groq
 fpdf
 livereload
 gunicorn
+pandas
+openpyxl
