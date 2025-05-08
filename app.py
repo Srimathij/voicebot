@@ -98,7 +98,7 @@ def trigger_call():
         "last_4_digit":   last_4,
         "currency":       currency
     })
-    voicebot_url = f"https://5b53-157-49-97-150.ngrok-free.app/voicebot?{query}"
+    voicebot_url = f"https://voiceapps.onrender.com/voicebot?{query}"
 
     try:
         call = twilio_client.calls.create(
@@ -130,6 +130,8 @@ def trigger_call():
         })
 
         return jsonify({'message': 'Call triggered', 'sid': call.sid})
+        print("▶️ Received POST request to /trigger-call")
+
 
     except Exception as e:
         print("[ERROR] trigger_call:", e)
