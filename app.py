@@ -45,7 +45,7 @@ from flask import Flask
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_FROM_NUMBER = "+13392373131"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = "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"
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY")
 
 
@@ -71,6 +71,9 @@ def is_before_due(due_date):
     due = datetime.strptime(due_date, "%Y-%m-%d").date()
     return due > today
 
+from flask import request, jsonify
+import urllib.parse
+from datetime import datetime
 @app.route('/trigger-call', methods=['POST'])
 def trigger_call():
     data      = request.get_json()
@@ -95,7 +98,7 @@ def trigger_call():
         "last_4_digit":   last_4,
         "currency":       currency
     })
-    voicebot_url = f"https://64c3-157-49-99-180.ngrok-free.app/voicebot?{query}"
+    voicebot_url = f"https://5b53-157-49-97-150.ngrok-free.app/voicebot?{query}"
 
     try:
         call = twilio_client.calls.create(
@@ -132,7 +135,7 @@ def trigger_call():
         print("[ERROR] trigger_call:", e)
         return jsonify({'error': str(e)}), 500
 
-#####status
+#####
 
 @app.route('/call-status', methods=['POST'])
 def call_status():
@@ -175,97 +178,128 @@ import glob, os
 from datetime import datetime
 from flask import jsonify, send_file, session
 
+
 from datetime import datetime
 import glob, os
 from io import BytesIO
-from flask import jsonify, send_file
+from flask import jsonify, send_file, current_app
 
 @app.route("/generate-report", methods=["POST"])
 def generate_report():
     try:
-        data     = request.get_json()
-        start    = datetime.strptime(data['startDate'], '%Y-%m-%d').date()
-        end      = datetime.strptime(data['endDate'],   '%Y-%m-%d').date()
+        data = request.get_json()
+        start = datetime.strptime(data['startDate'], '%Y-%m-%d').date()
+        end = datetime.strptime(data['endDate'], '%Y-%m-%d').date()
         rpt_type = data.get("reportType", "Report")
 
-        print(f"[DEBUG] Requested date range: {start} → {end}")
-
         rows = []
-        for path in glob.glob("recordings/*.*"):
+        rec_dir = "recordings"
+
+        for path in glob.glob(os.path.join(rec_dir, "*.*")):
             ext = os.path.splitext(path)[1].lower()
             if ext not in (".mp3", ".wav"):
                 continue
 
             fname = os.path.basename(path)
-            base, _ = os.path.splitext(fname)
-            parts   = base.split("_")
-
-            # Expect at least 3 parts: [callSid, MM-DD-YYYY, HH-MM-SS]
+            parts = fname.split("_")
             if len(parts) < 3:
-                print(f"[DEBUG] Skipping unexpected filename: {fname}")
                 continue
 
-            call_sid = parts[0]
-            date_str = parts[1]
-
-            # parse only the date portion
+            sid, date_str, _ = parts
             try:
                 file_date = datetime.strptime(date_str, "%m-%d-%Y").date()
-            except ValueError as e:
-                print(f"[DEBUG] Invalid date in filename {fname}: {e}")
+            except ValueError:
                 continue
 
-            print(f"[DEBUG] File {fname} → date {file_date}")
-
-            # date filter
             if not (start <= file_date <= end):
                 continue
 
-            # lookup by call SID
-            entry = next((c for c in call_log if c.get("sid") == call_sid), None)
-            if not entry:
-                print(f"[DEBUG] No call_log entry for SID {call_sid}")
+            # Transcribe audio
+            transcript_obj = transcribe_audio(path)
+            if not transcript_obj:
                 continue
 
-            name         = entry.get("name", "Customer")
-            last_4_digit = entry.get("last_4_digit", "****")
+            transcript_text = build_labeled_dialog(transcript_obj)
+            print(f"[📄 Transcript Snippet for {sid}]:\n{transcript_text[:400]}")
 
-            summary = summarize_with_groq(
-                          transcribe_audio(path),
-                          name,
-                          last_4_digit
-                      )
+            # Extract name/policy using LLM
+            extraction_prompt = f"""
+From the transcript below, extract the customer's full name and the last 4 digits of their policy number(Eg : 5678)
+
+If either is not mentioned, write:
+Name: Not Found
+Policy Number: Not Found
+
+Transcript:
+{transcript_text}
+
+Format your answer exactly as:
+Name: <name or Not Found>
+Policy Number: <4 digits or Not Found>
+"""
+
+            extraction_response = client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[{"role": "user", "content": extraction_prompt}],
+                temperature=0.7,
+                max_completion_tokens=256,
+                top_p=1,
+            )
+
+            extracted_text = extraction_response.choices[0].message.content.strip()
+            print(f"[🧠 RAW GPT Output for {sid}]: {extracted_text}")
+
+            match = re.search(r"Name:\s*(.+?)\s*Policy Number:\s*(\*{0,3}\d{1,4}|Not Found)", extracted_text, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                last_4 = match.group(2).strip()
+                if name.lower() == "not found":
+                    name = None
+                if last_4.lower() == "not found":
+                    last_4 = None
+            else:
+                name = None
+                last_4 = None
+
+            # Fallback from call_log
+            if not name or not last_4:
+                log_entry = next((c for c in call_log if c.get("sid") == sid), {})
+                name = name or log_entry.get("name", "Customer")
+                last_4 = last_4 or log_entry.get("policy", "****")
+
+            print(f"[✅ FINAL] SID: {sid} → Name: {name}, Policy: {last_4}")
+
+            # Summarize actions
+            action_summary = summarize_with_groq(transcript_text, name, last_4)
 
             rows.append({
                 "Customer Name": name,
-                "Policy Number": last_4_digit,
-                "Due Date":      file_date.strftime("%Y-%m-%d"),
-                "Actions":       summary
+                "Policy Number": last_4,
+                "Due Date": file_date.strftime("%Y-%m-%d"),
+                "Actions": action_summary
             })
-
-        print(f"[DEBUG] Total rows collected: {len(rows)}")
 
         if not rows:
             return jsonify({"error": "No recordings found"}), 404
 
-        # build and send Excel
-        df     = pd.DataFrame(rows, columns=["Customer Name","Policy Number","Due Date","Actions"])
+        # Create Excel file in memory
+        df = pd.DataFrame(rows, columns=["Customer Name", "Policy Number", "Due Date", "Actions"])
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name=rpt_type)
         output.seek(0)
 
+        filename = f"{rpt_type}_{start}_{end}.xlsx"
         return send_file(
             output,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name=f"{rpt_type}_{start}_{end}.xlsx"
+            download_name=filename
         )
 
     except Exception as e:
-        print("[ERROR] Report generation failed:", e)
+        print("[❌ ERROR] Report generation failed:", str(e))
         return jsonify({"error": str(e)}), 500
-
 #####llm####
 
 import os
@@ -474,7 +508,7 @@ Policy Number: {last_4_digit}
 
 Transcript:
 {text}
-At the end of each call, produce **only** the follow-up action items—no JSON, no extra sections, just a simple list of actions in natural and understandable text.
+At the end of each call, produce only the follow-up action items—no JSON, no extra sections, just a simple list of actions in natural and understandable text.The text should be in format , no asterisk.
 
 
 """
@@ -509,7 +543,22 @@ def recording_saved():
             break
     return ('',204)
 ######
-#     
+#    
+# 
+# 
+# @app.route('/call-status', methods=['POST'])
+# def call_status():
+#     call_sid    = request.form['CallSid']
+#     call_status = request.form['CallStatus']
+#     for c in call_log:
+#         if c['sid'] == call_sid:
+#             c['status'] = call_status
+#             if call_status == 'completed':
+#                 tw_call = twilio_client.calls(call_sid).fetch()
+#                 c['duration'] = int(tw_call.duration or 0)
+#             break
+#     return ('', 204)
+ 
     
 @app.route('/call-stats', methods=['GET'])
 def call_stats():
@@ -593,7 +642,7 @@ def welcome():
         action='/openaires',
         input='speech',
         speech_model='phone_call',
-        speechTimeout=0.2,
+        speechTimeout=0.1,
         actionOnEmptyResult=True
     )
     response.append(gather)
@@ -613,7 +662,7 @@ def fallback():
         response.hangup()
     else:
         gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                        speechTimeout=0.2, actionOnEmptyResult=True)
+                        speechTimeout=0.1, actionOnEmptyResult=True)
         response.append(gather)
     return str(response)
 
@@ -760,7 +809,7 @@ def chatbot_res():
 
     response.say(reply)
     gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                    speechTimeout=0.2, actionOnEmptyResult=True)
+                    speechTimeout=0.1, actionOnEmptyResult=True)
     response.append(gather)
     return str(response)
 
