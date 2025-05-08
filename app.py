@@ -12,12 +12,14 @@ import requests
 from groq import Groq
 import re
 
-
+import openai
 
 # Load .env variables
 load_dotenv()
 
-load_dotenv()
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
 groq_api_key = os.getenv("GROQ_API_KEY")
 
 # Initialize the Groq client
@@ -35,17 +37,12 @@ Session(app)
 from flask import Flask
 # from flask_cors import CORS
 
-# app = Flask(__name__)
-# # ← this will add the necessary Access‑Control‑* headers
-# #     and respond to OPTIONS on all routes
-# CORS(app)
-
 
 # Twilio & OpenAI config
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_FROM_NUMBER = "+13392373131"
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY")
 
 
@@ -98,7 +95,7 @@ def trigger_call():
         "last_4_digit":   last_4,
         "currency":       currency
     })
-    voicebot_url = f"https://voiceapps.onrender.com/voicebot?{query}"
+    voicebot_url = f"https://2d2e-157-49-97-150.ngrok-free.app/voicebot?{query}"
 
     try:
         call = twilio_client.calls.create(
@@ -130,8 +127,6 @@ def trigger_call():
         })
 
         return jsonify({'message': 'Call triggered', 'sid': call.sid})
-        print("▶️ Received POST request to /trigger-call")
-
 
     except Exception as e:
         print("[ERROR] trigger_call:", e)
