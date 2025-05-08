@@ -6,7 +6,7 @@ from twilio.rest import Client
 
 # Twilio credentials
 account_sid = 'AC16d7b9cf372c665e28e6f581b6a97690'
-auth_token = '86b92ce6409259f334c49c34b46cd5f4'
+auth_token = '90d7076e7df9f3fcec3f874bbb39bebf'
 client = Client(account_sid, auth_token)
 
 # Recording save path
