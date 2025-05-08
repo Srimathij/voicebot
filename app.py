@@ -639,7 +639,7 @@ def welcome():
         action='/openaires',
         input='speech',
         speech_model='phone_call',
-        speechTimeout=0.1,
+        speechTimeout=0,
         actionOnEmptyResult=True
     )
     response.append(gather)
@@ -659,7 +659,7 @@ def fallback():
         response.hangup()
     else:
         gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                        speechTimeout=0.1, actionOnEmptyResult=True)
+                        speechTimeout=0, actionOnEmptyResult=True)
         response.append(gather)
     return str(response)
 
@@ -806,7 +806,7 @@ def chatbot_res():
 
     response.say(reply)
     gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                    speechTimeout=0.1, actionOnEmptyResult=True)
+                    speechTimeout=0, actionOnEmptyResult=True)
     response.append(gather)
     return str(response)
 
