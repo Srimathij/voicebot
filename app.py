@@ -481,42 +481,43 @@ def download_transcripts():
 
 def summarize_with_groq(text, name, last_4_digit):
     prompt = f"""
-You are a professional call summarizer.
+You are a call summarization assistant.
 
-You will be given a transcript of a customer call, the customer's name, and the last 4 digits of their policy number.
+You will receive a transcript of a customer support call, along with the customer’s name and the last 4 digits of their policy number.
 
-🎯 Your task: Extract **only one actionable summary** of what the customer said or intended at the end of the call. Focus strictly on:
+🎯 Your task is to extract **only the final action or intention expressed by the customer** at the end of the call.
 
-- whether the customer plans to pay,
-- said they already paid,
-- declined,
-- asked for more info,
-- was the wrong person,
-- or did not engage at all.
+✅ Focus on clearly identifying **what the customer decided, requested, or intended**, such as:
 
-🛑 Do not summarize the full conversation.  
-✅ Only return the **next action or customer’s final intent**, as one short, clear sentence.
+- intends to pay
+- already paid
+- declined to pay
+- asked for more information
+- not the correct person
+- did not respond or engage
 
-If the customer said nothing or didn’t respond, return:  
-**“Customer did not respond or engage.”**
+📌 Output a single, short sentence describing the **next action or the customer’s final intent** — no summaries of the entire call, no extra commentary.
 
-Customer Name: {name}  
-Policy Number: {last_4_digit}  
+🛑 If the customer said nothing or didn’t participate, respond exactly with:  
+**Customer did not respond or engage.**
 
-Transcript:
+🧾 Customer Name: {name}  
+🔐 Policy Number: {last_4_digit}  
+
+📞 Transcript:  
 {text}
-At the end of each call, produce only the follow-up action items—no JSON, no extra sections, just a simple list of actions in natural and understandable text.The text should be in format , no asterisk.
 
-
+🎬 Based on this, respond with one single sentence describing only the final action point or intent.
 """
     resp = client.chat.completions.create(
         model="llama3-8b-8192",
         messages=[{"role":"user","content":prompt}],
-        temperature=0.7,
-        max_completion_tokens=512,
-        top_p=1,
+        temperature=0.3,
+        max_completion_tokens=128,
+        top_p=1.0,
     )
     return resp.choices[0].message.content.strip()
+
 
 
 #####
