@@ -86,15 +86,19 @@ def trigger_call():
     policy_str = str(policy or "")
     last_4     = policy_str[-4:] if len(policy_str) >= 4 else policy_str or "****"
 
-    # build the voicebot URL
+    def humanize_plan(plan):
+        return plan.replace("_", " ").title() if plan else ""
+
+    # then in your query builder
     query = urllib.parse.urlencode({
         "name":           name,
-        "plan_name":      plan,
+        "plan_name":      humanize_plan(plan),   # ✅ clean it up here
         "due_date":       due_date,
         "premium_amount": amount,
         "last_4_digit":   last_4,
         "currency":       currency
     })
+
     voicebot_url = f"https://ivrbot.onrender.com/voicebot?{query}"
 
     try:
@@ -132,23 +136,8 @@ def trigger_call():
         print("[ERROR] trigger_call:", e)
         return jsonify({'error': str(e)}), 500
 
-#####
+#####s
 
-@app.route('/call-status', methods=['POST'])
-def call_status():
-    call_sid    = request.form['CallSid']
-    call_status = request.form['CallStatus']
-    # update status
-    for c in call_log:
-        if c['sid'] == call_sid:
-            c['status'] = call_status
-            # if it just completed, fetch the real duration
-            if call_status == 'completed':
-                tw_call = twilio_client.calls(call_sid).fetch()
-                # tw_call.duration is in seconds
-                c['duration'] = int(tw_call.duration or 0)
-            break
-    return ('', 204)
 
 
     
@@ -163,6 +152,7 @@ import os
 import glob
 from datetime import datetime
 from io import BytesIO
+from datetime import datetime, date
 
 
 from flask import jsonify, send_file
@@ -175,6 +165,12 @@ import glob, os
 from datetime import datetime
 from flask import jsonify, send_file, session
 
+
+from datetime import datetime
+import glob, os, re
+from io import BytesIO
+from flask import jsonify, send_file, request, current_app
+import pandas as pd
 
 from datetime import datetime, date
 import glob, os, re
@@ -317,7 +313,6 @@ Due Date: <date or Not Found>
     except Exception as e:
         current_app.logger.error("Report generation failed", exc_info=e)
         return jsonify({"error": str(e)}), 500
-
 #####llm####
 
 import os
@@ -539,8 +534,6 @@ You will receive a transcript of a customer support call, along with the custome
     )
     return resp.choices[0].message.content.strip()
 
-
-
 #####
 @app.route('/recording-saved', methods=['POST'])
 def recording_saved():
@@ -565,50 +558,53 @@ def recording_saved():
 #    
 # 
 # 
-# @app.route('/call-status', methods=['POST'])
-# def call_status():
-#     call_sid    = request.form['CallSid']
-#     call_status = request.form['CallStatus']
-#     for c in call_log:
-#         if c['sid'] == call_sid:
-#             c['status'] = call_status
-#             if call_status == 'completed':
-#                 tw_call = twilio_client.calls(call_sid).fetch()
-#                 c['duration'] = int(tw_call.duration or 0)
-#             break
-#     return ('', 204)
- 
-    
+@app.route('/call-status', methods=['POST'])
+def call_status():
+    call_sid    = request.form['CallSid']
+    call_status = request.form['CallStatus']
+    for c in call_log:
+        if c['sid'] == call_sid:
+            c['status'] = call_status
+            if call_status == 'completed':
+                tw_call = twilio_client.calls(call_sid).fetch()
+                c['duration'] = int(tw_call.duration or 0)
+            break
+    return ('', 204)
+
+
+
 @app.route('/call-stats', methods=['GET'])
 def call_stats():
     today = datetime.now().date()
-
+ 
     # only calls triggered today
     today_calls = [
         c for c in call_log
         if datetime.fromisoformat(c["timestamp"]).date() == today
     ]
-
+ 
     total = len(today_calls)
 
     # “successful” — we have a recordingUrl (i.e. bot spoke & recorded)
-    successful = sum(1 for c in today_calls if c.get("recordingUrl"))
+    success_count = sum(1 for c in today_calls if c.get("recordingUrl"))
 
     # everything else is “failed”
-    successful = total - successful
+    failure_count = total - success_count
 
     # average duration of those that did record
-    durations = [c.get("duration", 0) for c in today_calls if c.get("duration")]
-    avg_secs = int(sum(durations) / len(durations)) if durations else 0
-    avg_duration = f"{avg_secs // 60}:{avg_secs % 60:02d}"
+    durations   = [c.get("duration", 0) for c in today_calls if c.get("duration")]
+    avg_secs    = int(sum(durations)/len(durations)) if durations else 0
+    avg_duration = f"{avg_secs//60}:{avg_secs%60:02d}"
 
     return jsonify({
         "today":      total,
-        "successful": successful,
-        "failed":     0,
+        "successful": success_count,
+        "failed":     failure_count,
         "duration":   avg_duration
     })
 
+ 
+ 
 
 
 ######
@@ -632,7 +628,15 @@ def call_history():
 @app.route('/voicebot', methods=['POST'])
 def voicebot():
     session['name'] = request.args.get('name', 'Customer')
-    session['plan_name'] = request.args.get('plan_name', 'Plan')
+    plan_name = request.args.get('plan_name', 'Plan')
+    
+    # Compute the spoken version (human-readable format)
+    spoken_plan = plan_name.replace("_", " ").title()
+
+    # Store both the plan_name and spoken_plan in the session
+    session['plan_name'] = plan_name
+    session['spoken_plan'] = spoken_plan
+
     session['premium_amount'] = request.args.get('premium_amount', '0')
     session['due_date'] = request.args.get('due_date', '2025-01-01')
     session['last_4_digit'] = request.args.get('last_4_digit', '****')
@@ -640,7 +644,7 @@ def voicebot():
     session['fallback_count'] = 0
     session['history'] = []
 
-    print(f"[INFO] Voicebot started for: {session['name']}, Plan: {session['plan_name']}, Due: {session['due_date']}, Amount: {session['premium_amount']} {session['currency']}")
+    print(f"[INFO] Voicebot started for: {session['name']}, Plan: {session['spoken_plan']}, Due: {session['due_date']}, Amount: {session['premium_amount']} {session['currency']}")
 
     return str(welcome())
 
@@ -661,7 +665,7 @@ def welcome():
         action='/openaires',
         input='speech',
         speech_model='phone_call',
-        speechTimeout=0.1,
+        speechTimeout=0.05,
         actionOnEmptyResult=True
     )
     response.append(gather)
@@ -681,7 +685,7 @@ def fallback():
         response.hangup()
     else:
         gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                        speechTimeout=0.1, actionOnEmptyResult=True)
+                        speechTimeout=0.05, actionOnEmptyResult=True)
         response.append(gather)
     return str(response)
 
@@ -689,6 +693,8 @@ def fallback():
 def chatbot_res():
     response = VoiceResponse()
     speech_result = request.values.get('SpeechResult', '').strip()
+    
+
 
     if not speech_result:
         return str(response.redirect('/fallback'))
@@ -696,7 +702,16 @@ def chatbot_res():
     # Get session data
     name = session.get('name', 'Customer')
     last_4_digit = session.get('last_4_digit', '****')
-    plan_name = session.get('plan_name', 'your plan')
+    plan_name = request.args.get('plan_name', 'Plan')
+    
+    # Compute the spoken version (human-readable format)
+    spoken_plan = plan_name.replace("_", " ").title()
+
+    # Store both the plan_name and spoken_plan in the session
+    session['plan_name'] = plan_name
+    session['spoken_plan'] = spoken_plan
+
+    
     premium_amount = session.get('premium_amount', '0')
     cur = session.get("currency", "currency")
     due_date = session.get('due_date', 'Unknown')
@@ -734,10 +749,33 @@ def chatbot_res():
     history = session.get('history', [])    
     prompt = f"""
 
-        You are a voice assistant for Allianz PNB Life, and your name is Ava. You assist users with their queries in a professional, natural, and dynamic manner based on the script provided. You act confidently and intelligently to interpret user responses and provide relevant information, especially about their premium payment status.
+        You are a voice assistant for Allianz PNB Life, and your name is Ava. You assist users with their queries in a professional, natural, and dynamic manner based on the script provided. You act confidently and intelligently to interpret user responses and provide relevant information, especially about their premium payment status.You are Ava, a voice assistant for an insurance company. 
+        When reading plan names like 'allianz_score', replace underscores with spaces 
+        and capitalize each word, so it becomes 'Allianz Score'. 
+        Always speak clearly and avoid technical formatting.
+
     🧩 IMPORTANT FORMAT NOTE:
         When reading out policy numbers (or any numeric code), say each digit individually.  
         For example, “5678” should be spoken as “five, six, seven, eight.”
+    
+        
+    🧩 Always follow these formatting instructions:
+        - When saying the plan name, replace underscores (_) with spaces and capitalize each word. 
+        For example: "allianz_score" should be spoken as "Allianz Score".
+        - Read the due date naturally (e.g., “May 15th, 2025”).
+        - Speak in a warm, professional tone.
+
+        Avoid reading any underscores, camelCase, or technical formatting aloud.
+
+
+
+    🧩 CURRENCY PRONUNCIATION:
+    - Always say "Philippine Peso" instead of the currency code "PHP".
+    - For US Dollar, say "US Dollar" instead of "USD".
+
+    - Format plan name:
+        spoken_plan_name = plan_name.replace("_", " ").title()
+
 
     🧩 GENERAL PRINCIPLES:
     - Always be concise, friendly, and professional.
@@ -748,10 +786,15 @@ def chatbot_res():
     - If the user repeatedly says they are the wrong person, vary the response slightly to maintain a natural tone.
     - Do not share any confidential policy or account details until identity is confirmed.
 
-    🧩 GREETING:
-    - Start by saying
-        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {plan_name} policy with policy number ending in {last_4_digit} (read as individual digits).  
-         May we ask you to kindly pay your premium of {premium_amount} {cur} on or before {due_date} to keep your policy active and enjoy continuous coverage? Would you like to know more about payment options?"
+    
+    🧩 GREETING LOGIC:
+    Start by saying : If user says any of the following phrases to indicate they are speaking:
+    ["speaking", "yes speaking", "yes, speaking", "this is speaking", "i am speaking"]
+
+    Respond:
+    "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {spoken_plan} policy with policy number ending in {last_4_digit} (read as individual digits).  
+    May we ask you to kindly pay your premium of {premium_amount} {cur} on or before {due_date} to keep your policy active and enjoy continuous coverage? Would you like to know more about payment options?"
+
 
     If speaking to the policyowner:
     - Continue based on due date status (before or after due date).
@@ -760,12 +803,12 @@ def chatbot_res():
 
     If BEFORE the due date:
     - Respond:
-        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {plan_name} policy with policy number ending in {last_4_digit}.
+        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {spoken_plan} policy with policy number ending in {last_4_digit}.
         May we ask you to kindly pay your premium of {premium_amount} {cur} on or before {due_date} to keep your policy active and enjoy continuous coverage.Would you like to know more about payment options?"
 
     If AFTER the due date:
     - Respond:
-        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {plan_name} policy with policy number ending in {last_4_digit}.
+        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {spoken_plan} policy with policy number ending in {last_4_digit}.
         You have missed your payment of {premium_amount} {cur} which was due last {due_date}.
         To keep your policy active and enjoy continuous coverage, may we kindly ask you to pay your premium on or before [31 days after due date – actual date]Would you like to know more about payment options??"
 
@@ -810,6 +853,19 @@ def chatbot_res():
         - Respond:
             "I understand. May I ask why you’re unable to make the payment today? This will help me direct you to the right assistance."
 
+    - Understand what user is speaking and respond accordingly.
+
+    - Always normalize speech:
+        - Never pronounce special characters like underscores or dashes.
+        - plan_name like "allianz_score" → "Allianz Score"
+        - cur like "PHP" → "Philippine Peso", "USD" → "US Dollar"
+        - Speak policy digits clearly: "five, six, seven, eight"
+    
+    - Avoid telling underscore or any other special characters while speaking please , you should act as an intelligent bot. 
+
+        
+    - Recognize English phrases accurately, especially greeting confirmations like:", "this is speaking", etc.
+
      """
 
     history.insert(0, {"role": "system", "content": prompt})
@@ -818,7 +874,7 @@ def chatbot_res():
     completion = client_ai.chat.completions.create(
         model="gpt-4o",
         messages=truncate_history(history),
-        temperature=0.7,
+        temperature=1,
         max_tokens=1024,
     )
 
@@ -828,7 +884,7 @@ def chatbot_res():
 
     response.say(reply)
     gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                    speechTimeout=0.1, actionOnEmptyResult=True)
+                    speechTimeout=0.05, actionOnEmptyResult=True)
     response.append(gather)
     return str(response)
 
