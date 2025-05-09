@@ -86,19 +86,15 @@ def trigger_call():
     policy_str = str(policy or "")
     last_4     = policy_str[-4:] if len(policy_str) >= 4 else policy_str or "****"
 
-    def humanize_plan(plan):
-        return plan.replace("_", " ").title() if plan else ""
-
-    # then in your query builder
+    # build the voicebot URL
     query = urllib.parse.urlencode({
         "name":           name,
-        "plan_name":      humanize_plan(plan),   # ✅ clean it up here
+        "plan_name":      plan,
         "due_date":       due_date,
         "premium_amount": amount,
         "last_4_digit":   last_4,
         "currency":       currency
     })
-
     voicebot_url = f"https://ivrbot.onrender.com/voicebot?{query}"
 
     try:
@@ -628,15 +624,7 @@ def call_history():
 @app.route('/voicebot', methods=['POST'])
 def voicebot():
     session['name'] = request.args.get('name', 'Customer')
-    plan_name = request.args.get('plan_name', 'Plan')
-    
-    # Compute the spoken version (human-readable format)
-    spoken_plan = plan_name.replace("_", " ").title()
-
-    # Store both the plan_name and spoken_plan in the session
-    session['plan_name'] = plan_name
-    session['spoken_plan'] = spoken_plan
-
+    session['plan_name'] = request.args.get('plan_name', 'Plan')
     session['premium_amount'] = request.args.get('premium_amount', '0')
     session['due_date'] = request.args.get('due_date', '2025-01-01')
     session['last_4_digit'] = request.args.get('last_4_digit', '****')
@@ -644,7 +632,7 @@ def voicebot():
     session['fallback_count'] = 0
     session['history'] = []
 
-    print(f"[INFO] Voicebot started for: {session['name']}, Plan: {session['spoken_plan']}, Due: {session['due_date']}, Amount: {session['premium_amount']} {session['currency']}")
+    print(f"[INFO] Voicebot started for: {session['name']}, Plan: {session['plan_name']}, Due: {session['due_date']}, Amount: {session['premium_amount']} {session['currency']}")
 
     return str(welcome())
 
@@ -693,8 +681,6 @@ def fallback():
 def chatbot_res():
     response = VoiceResponse()
     speech_result = request.values.get('SpeechResult', '').strip()
-    
-
 
     if not speech_result:
         return str(response.redirect('/fallback'))
@@ -702,16 +688,7 @@ def chatbot_res():
     # Get session data
     name = session.get('name', 'Customer')
     last_4_digit = session.get('last_4_digit', '****')
-    plan_name = request.args.get('plan_name', 'Plan')
-    
-    # Compute the spoken version (human-readable format)
-    spoken_plan = plan_name.replace("_", " ").title()
-
-    # Store both the plan_name and spoken_plan in the session
-    session['plan_name'] = plan_name
-    session['spoken_plan'] = spoken_plan
-
-    
+    plan_name = session.get('plan_name', 'your plan')
     premium_amount = session.get('premium_amount', '0')
     cur = session.get("currency", "currency")
     due_date = session.get('due_date', 'Unknown')
@@ -749,24 +726,18 @@ def chatbot_res():
     history = session.get('history', [])    
     prompt = f"""
 
-        You are a voice assistant for Allianz PNB Life, and your name is Ava. You assist users with their queries in a professional, natural, and dynamic manner based on the script provided. You act confidently and intelligently to interpret user responses and provide relevant information, especially about their premium payment status.You are Ava, a voice assistant for an insurance company. 
-        When reading plan names like 'allianz_score', replace underscores with spaces 
-        and capitalize each word, so it becomes 'Allianz Score'. 
-        Always speak clearly and avoid technical formatting.
-
+        You are a voice assistant for Allianz PNB Life, and your name is Ava. You assist users with their queries in a professional, natural, and dynamic manner based on the script provided. You act confidently and intelligently to interpret user responses and provide relevant information, especially about their premium payment status.
     🧩 IMPORTANT FORMAT NOTE:
         When reading out policy numbers (or any numeric code), say each digit individually.  
         For example, “5678” should be spoken as “five, six, seven, eight.”
     
-        
-    🧩 Always follow these formatting instructions:
-        - When saying the plan name, replace underscores (_) with spaces and capitalize each word. 
-        For example: "allianz_score" should be spoken as "Allianz Score".
-        - Read the due date naturally (e.g., “May 15th, 2025”).
-        - Speak in a warm, professional tone.
+    🧩 DATA FORMATTING (APPLY BEFORE SPEAKING):
+    - Format plan name to avoid underscores and ensure natural speech:
+        spoken_plan_name = plan_name.replace("_", " ").title()
 
-        Avoid reading any underscores, camelCase, or technical formatting aloud.
-
+        🔊 Examples:
+        - "allianz_score" → "Allianz Score"
+        - "wealth_accumulator" → "Wealth Accumulator"
 
 
     🧩 CURRENCY PRONUNCIATION:
@@ -792,7 +763,7 @@ def chatbot_res():
     ["speaking", "yes speaking", "yes, speaking", "this is speaking", "i am speaking"]
 
     Respond:
-    "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {spoken_plan} policy with policy number ending in {last_4_digit} (read as individual digits).  
+    "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {plan_name} policy with policy number ending in {last_4_digit} (read as individual digits).  
     May we ask you to kindly pay your premium of {premium_amount} {cur} on or before {due_date} to keep your policy active and enjoy continuous coverage? Would you like to know more about payment options?"
 
 
@@ -803,12 +774,12 @@ def chatbot_res():
 
     If BEFORE the due date:
     - Respond:
-        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {spoken_plan} policy with policy number ending in {last_4_digit}.
+        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {plan_name} policy with policy number ending in {last_4_digit}.
         May we ask you to kindly pay your premium of {premium_amount} {cur} on or before {due_date} to keep your policy active and enjoy continuous coverage.Would you like to know more about payment options?"
 
     If AFTER the due date:
     - Respond:
-        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {spoken_plan} policy with policy number ending in {last_4_digit}.
+        "Hi {name}. Please be aware that this call may be recorded for security and quality assurance purposes. We wish to remind you of your premium payment for your {plan_name} policy with policy number ending in {last_4_digit}.
         You have missed your payment of {premium_amount} {cur} which was due last {due_date}.
         To keep your policy active and enjoy continuous coverage, may we kindly ask you to pay your premium on or before [31 days after due date – actual date]Would you like to know more about payment options??"
 
@@ -860,8 +831,6 @@ def chatbot_res():
         - plan_name like "allianz_score" → "Allianz Score"
         - cur like "PHP" → "Philippine Peso", "USD" → "US Dollar"
         - Speak policy digits clearly: "five, six, seven, eight"
-    
-    - Avoid telling underscore or any other special characters while speaking please , you should act as an intelligent bot. 
 
         
     - Recognize English phrases accurately, especially greeting confirmations like:", "this is speaking", etc.
