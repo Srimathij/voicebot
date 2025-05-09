@@ -176,17 +176,18 @@ from datetime import datetime
 from flask import jsonify, send_file, session
 
 
-from datetime import datetime
-import glob, os
+from datetime import datetime, date
+import glob, os, re
 from io import BytesIO
-from flask import jsonify, send_file, current_app
+from flask import jsonify, send_file, request, current_app
+import pandas as pd
 
 @app.route("/generate-report", methods=["POST"])
 def generate_report():
     try:
-        data = request.get_json()
+        data  = request.get_json()
         start = datetime.strptime(data['startDate'], '%Y-%m-%d').date()
-        end = datetime.strptime(data['endDate'], '%Y-%m-%d').date()
+        end   = datetime.strptime(data['endDate'],   '%Y-%m-%d').date()
         rpt_type = data.get("reportType", "Report")
 
         rows = []
@@ -197,8 +198,8 @@ def generate_report():
             if ext not in (".mp3", ".wav"):
                 continue
 
-            fname = os.path.basename(path)
-            parts = fname.split("_")
+            fname  = os.path.basename(path)
+            parts  = fname.split("_")
             if len(parts) < 3:
                 continue
 
@@ -211,76 +212,95 @@ def generate_report():
             if not (start <= file_date <= end):
                 continue
 
-            # Transcribe audio
+            # Transcribe:
             transcript_obj = transcribe_audio(path)
             if not transcript_obj:
                 continue
-
             transcript_text = build_labeled_dialog(transcript_obj)
-            print(f"[📄 Transcript Snippet for {sid}]:\n{transcript_text[:400]}")
 
-            # Extract name/policy using LLM
+            # Prompt for Name / Policy / Due Date
             extraction_prompt = f"""
-From the transcript below, extract the customer's full name and the last 4 digits of their policy number(Eg : 5678)
+From the transcript below, extract:
+  • the customer's full name  
+  • the last 4 digits of their policy number (e.g. 5678)  
+  • the due date for their next payment (in YYYY-MM-DD or MM/DD/YYYY)
 
-If either is not mentioned, write:
-Name: Not Found
-Policy Number: Not Found
+If any item is not mentioned, write:
+  Name: Not Found
+  Policy Number: Not Found
+  Due Date: Not Found
 
 Transcript:
 {transcript_text}
 
-Format your answer exactly as:
+Format exactly as:
 Name: <name or Not Found>
 Policy Number: <4 digits or Not Found>
+Due Date: <date or Not Found>
 """
-
-            extraction_response = client.chat.completions.create(
-                model="llama3-8b-8192",
+            resp = client.chat.completions.create(
+                model="llama3-70b-8192",
                 messages=[{"role": "user", "content": extraction_prompt}],
-                temperature=0.7,
-                max_completion_tokens=256,
-                top_p=1,
+                temperature=1,
+                max_completion_tokens=500,
             )
+            extracted = resp.choices[0].message.content.strip()
 
-            extracted_text = extraction_response.choices[0].message.content.strip()
-            print(f"[🧠 RAW GPT Output for {sid}]: {extracted_text}")
-
-            match = re.search(r"Name:\s*(.+?)\s*Policy Number:\s*(\*{0,3}\d{1,4}|Not Found)", extracted_text, re.IGNORECASE)
+            # Regex out all three fields
+            match = re.search(
+                r"Name:\s*(.+?)\s*Policy Number:\s*(\*{0,3}\d{1,4}|Not Found)\s*Due Date:\s*([0-9/\-]+|Not Found)",
+                extracted, re.IGNORECASE
+            )
             if match:
-                name = match.group(1).strip()
-                last_4 = match.group(2).strip()
-                if name.lower() == "not found":
-                    name = None
-                if last_4.lower() == "not found":
-                    last_4 = None
+                name    = match.group(1).strip()
+                last_4  = match.group(2).strip()
+                due_str = match.group(3).strip()
+
+                if name.lower()   == "not found": name   = None
+                if last_4.lower() == "not found": last_4 = None
+
+                # Try parsing due date
+                due_date = None
+                if due_str.lower() != "not found":
+                    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+                        try:
+                            due_date = datetime.strptime(due_str, fmt).date()
+                            break
+                        except ValueError:
+                            continue
             else:
-                name = None
-                last_4 = None
+                name, last_4, due_date = None, None, None
 
-            # Fallback from call_log
-            if not name or not last_4:
-                log_entry = next((c for c in call_log if c.get("sid") == sid), {})
-                name = name or log_entry.get("name", "Customer")
-                last_4 = last_4 or log_entry.get("policy", "****")
-
-            print(f"[✅ FINAL] SID: {sid} → Name: {name}, Policy: {last_4}")
+            # Fallback on call_log
+            if not name or not last_4 or not due_date:
+                entry = next((c for c in call_log if c.get("sid") == sid), {})
+                name     = name     or entry.get("name", "Customer")
+                last_4   = last_4   or entry.get("policy", "****")
+                due_date = due_date or entry.get("due_date")
 
             # Summarize actions
-            action_summary = summarize_with_groq(transcript_text, name, last_4)
+            actions = summarize_with_groq(transcript_text, name, last_4)
+
+            # Format due date for Excel
+            if isinstance(due_date, date):
+                due_val = due_date.strftime("%Y-%m-%d")
+            elif isinstance(due_date, str):
+                due_val = due_date
+            else:
+                due_val = "Not Found"
 
             rows.append({
                 "Customer Name": name,
                 "Policy Number": last_4,
-                "Due Date": file_date.strftime("%Y-%m-%d"),
-                "Actions": action_summary
+                "Due Date": due_val,
+                "Actions": actions
             })
 
         if not rows:
             return jsonify({"error": "No recordings found"}), 404
 
-        # Create Excel file in memory
-        df = pd.DataFrame(rows, columns=["Customer Name", "Policy Number", "Due Date", "Actions"])
+        # Build Excel
+        df = pd.DataFrame(rows, columns=["Customer Name","Policy Number","Due Date","Actions"])
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name=rpt_type)
@@ -295,8 +315,9 @@ Policy Number: <4 digits or Not Found>
         )
 
     except Exception as e:
-        print("[❌ ERROR] Report generation failed:", str(e))
+        current_app.logger.error("Report generation failed", exc_info=e)
         return jsonify({"error": str(e)}), 500
+
 #####llm####
 
 import os
