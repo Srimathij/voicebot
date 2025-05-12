@@ -212,23 +212,22 @@ def generate_report():
 
             # Prompt for Name / Policy / Due Date
             extraction_prompt = f"""
-From the transcript below, extract:
-  • the customer's full name  
-  • the last 4 digits of their policy number (e.g. 5678)  
-  • the due date for their next payment (in YYYY-MM-DD or MM/DD/YYYY)
+You are an information extraction assistant. Carefully review the transcript below and extract the following customer details with high accuracy:
 
-If any item is not mentioned, write:
-  Name: Not Found
-  Policy Number: Not Found
-  Due Date: Not Found
+1. The customer's **full name**  
+2. The **last 4 digits** of their **policy number** (e.g., 5678)  
+3. The **due date** for their next payment (acceptable formats: YYYY-MM-DD or MM/DD/YYYY)
 
-Transcript:
+Only return what's clearly stated in the transcript. If any detail is missing or ambiguous, mark it as "Not Found".
+
+TRANSCRIPT:
 {transcript_text}
 
-Format exactly as:
-Name: <name or Not Found>
-Policy Number: <4 digits or Not Found>
-Due Date: <date or Not Found>
+Respond in the following format (no additional commentary):
+
+Name: <Full Name or Not Found>  
+Policy Number: <4 digits or Not Found>  
+Due Date: <Date or Not Found>
 """
             resp = client.chat.completions.create(
                 model="llama3-70b-8192",
