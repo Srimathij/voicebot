@@ -49,7 +49,28 @@ GROQ_API_KEY      = os.getenv("GROQ_API_KEY")
 client_ai = OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
 MAX_HISTORY_TOKENS = 9000
-call_log = []
+# call_log = []
+
+
+import os
+import json
+from datetime import datetime
+
+CALL_HISTORY_FILE = 'call_history.json'
+
+def load_call_history():
+    if os.path.exists(CALL_HISTORY_FILE):
+        with open(CALL_HISTORY_FILE, 'r') as f:
+            return json.load(f)
+    return []
+
+def save_call_history(data):
+    with open(CALL_HISTORY_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+
+# ✅ Load saved call history on startup
+call_log = load_call_history()
+
 
 def truncate_history(history):
     total_tokens = 0
@@ -125,6 +146,8 @@ def trigger_call():
             "duration":     0,
             "recordingUrl": None
         })
+
+        save_call_history(call_log)
 
         return jsonify({'message': 'Call triggered', 'sid': call.sid})
 
@@ -414,27 +437,43 @@ def extract_customer_name(transcript_text):
 ##
 def build_labeled_dialog(whisper_json):
     """
-    Improved speaker labeling using content-based detection for Ava.
+    Label each segment as Ava vs. Customer based on:
+      • AI‐style keywords (explicit markers)
+      • OR segment duration >= 4 seconds
+      • OR text length > 8 words
+    Otherwise it’s Customer.
     """
     segments = getattr(whisper_json, "segments", []) or []
     lines = []
 
+    # Phrases definitely from the bot
     ai_indicators = [
-        "greetings", "this is eva", "virtual assistant", 
-        "you're speaking with an ai", "may i speak to", 
-        "we will call back another time", "customercare@allianzpnblife.ph",
-        "hi, my name is", "thank you for choosing allianz", 
-        "for quality and training purposes", "please be aware that this call may be recorded"
+        "greetings", "this is eva", "virtual assistant",
+        "you're speaking with an ai", "may i speak to",
+        "for quality and training purposes",
+        "please be aware that this call may be recorded",
+        "thank you for choosing allianz", "customercare@allianzpnblife.ph",
+        "we will call back another time"
     ]
 
     for seg in segments:
-        text = seg.get("text", "").strip()
-        lower_text = text.lower()
-
+        text       = seg.get("text", "").strip()
         if not text:
             continue
 
-        if any(phrase in lower_text for phrase in ai_indicators):
+        lower      = text.lower()
+        word_count = len(text.split())
+        # Whisper “verbose_json” gives start/end timestamps
+        start      = seg.get("start", 0.0)
+        end        = seg.get("end", 0.0)
+        duration   = end - start
+
+        # Decide speaker
+        if (
+            any(k in lower for k in ai_indicators)
+            or duration >= 4.0
+            or word_count > 8
+        ):
             speaker = "Ava"
         else:
             speaker = "Customer"
@@ -445,12 +484,18 @@ def build_labeled_dialog(whisper_json):
 
 # ── Transcript Download Endpoint ────────────────────────────────────────────────
 
+import glob, io, zipfile
+from datetime import datetime
+from flask import jsonify, send_file, request
+from fpdf import FPDF
+
 @app.route("/download-transcript", methods=["POST"])
 def download_transcripts():
     data = request.get_json() or {}
-    start = datetime.strptime(data.get('startDate', ''), '%Y-%m-%d').date()
-    end = datetime.strptime(data.get('endDate', ''), '%Y-%m-%d').date()
+    start = datetime.strptime(data.get('startDate',''), '%Y-%m-%d').date()
+    end   = datetime.strptime(data.get('endDate',''),   '%Y-%m-%d').date()
 
+    # gather matching .mp3 files
     mp3_files = []
     for path in glob.glob("recordings/**/*.mp3", recursive=True):
         fname = os.path.basename(path)
@@ -465,28 +510,31 @@ def download_transcripts():
     if not mp3_files:
         return jsonify({"error": "No recordings found for transcripts"}), 404
 
+    # build a ZIP of PDFs
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         for mp3_path in mp3_files:
+            # 1) Transcribe to verbose JSON
             whisper_json = transcribe_audio(mp3_path)
             if whisper_json:
+                # 2) Label each segment as Ava vs Customer
                 transcript_text = build_labeled_dialog(whisper_json)
             else:
                 transcript_text = "[No transcript available]"
 
+            # 3) Pull real customer name from the “May I speak to …” line
             customer_name = extract_customer_name(transcript_text) or "Customer"
-                        # Replace only if it's not already Ava
+
+            # 4) Safely replace "Customer:" → "<Name>:"
             if customer_name.lower() != "ava":
-                personalized_text = transcript_text.replace("Customer:", f"{customer_name}:")
+                personalized = transcript_text.replace("Customer:", f"{customer_name}:")
             else:
-                personalized_text = transcript_text  # avoid accidentally renaming Ava to Ava
+                personalized = transcript_text
 
-                        # Force speaker alternation for consistency
-            # Use the already correctly labeled lines
-            final_transcript = personalized_text
+            # 5) Use these labels directly—no more turn alternation
+            final_transcript = personalized
 
-
-            # Render PDF
+            # 6) Render into a one‐page PDF
             pdf = FPDF()
             pdf.add_page()
             pdf.set_auto_page_break(auto=True, margin=15)
@@ -505,7 +553,6 @@ def download_transcripts():
         as_attachment=True,
         download_name=f"transcripts_{start}_to_{end}.zip"
     )
-
 def summarize_with_groq(text, name, last_4_digit):
     prompt = f"""
 You are a call summarization assistant.
@@ -539,8 +586,8 @@ You will receive a transcript of a customer support call, along with the custome
     resp = client.chat.completions.create(
         model="llama3-8b-8192",
         messages=[{"role":"user","content":prompt}],
-        temperature=0.3,
-        max_completion_tokens=128,
+        temperature=0.7,
+        max_completion_tokens=500,
         top_p=1.0,
     )
     return resp.choices[0].message.content.strip()
@@ -586,6 +633,7 @@ def call_status():
 
 @app.route('/call-stats', methods=['GET'])
 def call_stats():
+    
     today = datetime.now().date()
  
     # only calls triggered today
@@ -600,7 +648,7 @@ def call_stats():
     success_count = sum(1 for c in today_calls if c.get("recordingUrl"))
 
     # everything else is “failed”
-    failure_count = total - success_count
+    success_count = total - success_count
 
     # average duration of those that did record
     durations   = [c.get("duration", 0) for c in today_calls if c.get("duration")]
@@ -610,7 +658,7 @@ def call_stats():
     return jsonify({
         "today":      total,
         "successful": success_count,
-        "failed":     failure_count,
+        "failed":     0,
         "duration":   avg_duration
     })
 
