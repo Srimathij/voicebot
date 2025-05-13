@@ -410,21 +410,37 @@ def extract_customer_name(transcript_text):
                 return match.group(1).strip().title()
     return None
 
-# ── Build Transcript with Labels ────────────────────────────────────────────────
 
+##
 def build_labeled_dialog(whisper_json):
     """
-    Label dialog alternately as Ava / Customer based on segments.
+    Improved speaker labeling using content-based detection for Ava.
     """
     segments = getattr(whisper_json, "segments", []) or []
-    speaker = "Ava"
     lines = []
+
+    ai_indicators = [
+        "greetings", "this is eva", "virtual assistant", 
+        "you're speaking with an ai", "may i speak to", 
+        "we will call back another time", "customercare@allianzpnblife.ph",
+        "hi, my name is", "thank you for choosing allianz", 
+        "for quality and training purposes", "please be aware that this call may be recorded"
+    ]
+
     for seg in segments:
         text = seg.get("text", "").strip()
+        lower_text = text.lower()
+
         if not text:
             continue
+
+        if any(phrase in lower_text for phrase in ai_indicators):
+            speaker = "Ava"
+        else:
+            speaker = "Customer"
+
         lines.append(f"{speaker}: {text}")
-        speaker = "Customer" if speaker == "Ava" else "Ava"
+
     return "\n".join(lines)
 
 # ── Transcript Download Endpoint ────────────────────────────────────────────────
@@ -459,16 +475,16 @@ def download_transcripts():
                 transcript_text = "[No transcript available]"
 
             customer_name = extract_customer_name(transcript_text) or "Customer"
-            personalized_text = transcript_text.replace("Customer:", f"{customer_name}:")
+                        # Replace only if it's not already Ava
+            if customer_name.lower() != "ava":
+                personalized_text = transcript_text.replace("Customer:", f"{customer_name}:")
+            else:
+                personalized_text = transcript_text  # avoid accidentally renaming Ava to Ava
 
-            # Force speaker alternation for consistency
-            final_lines = []
-            speaker = "Ava"
-            for line in personalized_text.splitlines():
-                text = line.split(":", 1)[1].strip()
-                final_lines.append(f"{speaker}: {text}")
-                speaker = customer_name if speaker == "Ava" else "Ava"
-            final_transcript = "\n".join(final_lines)
+                        # Force speaker alternation for consistency
+            # Use the already correctly labeled lines
+            final_transcript = personalized_text
+
 
             # Render PDF
             pdf = FPDF()
