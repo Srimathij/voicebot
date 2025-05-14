@@ -776,7 +776,7 @@ def chatbot_res():
     if any(kw in speech_result for kw in exit_keywords):
         name = session.get('name', 'Customer')
         goodbye_msg = (
-            f"My pleasure speaking with you, Mr./Ms. {name}. "
+            f"My pleasure speaking with you, {name}. "
             "For other concerns, feel free to reach out to us via email at "
             "customercare@allianzpnblife.ph or call us at 8818-4357. "
             "Thank you for choosing Allianz PNB Life as your insurance partner. "
@@ -878,11 +878,11 @@ def chatbot_res():
     🧩 END-OF-CALL DETECTION:
 
     - If user clearly wants to end the call (e.g., says "no", "no thanks", "nothing", etc. when asked if they want more info):
-        → "My pleasure speaking with you, Mr./Ms. {name}. For other concerns, feel free to reach out to us via email at customercare@allianzpnblife.ph or call us at 8818-4357.  
+        → "My pleasure speaking with you, {name}. For other concerns, feel free to reach out to us via email at customercare@allianzpnblife.ph or call us at 8818-4357.  
         Thank you for choosing Allianz PNB Life as your insurance partner. Have a good day ahead!"
 
     - If user says thank you, goodbye, or confirms completion:
-        → "My pleasure speaking with you, Mr./Ms. {name}. For other concerns, feel free to reach out to us via email at customercare@allianzpnblife.ph or call us at 8818-4357.  
+        → "My pleasure speaking with you, {name}. For other concerns, feel free to reach out to us via email at customercare@allianzpnblife.ph or call us at 8818-4357.  
         Thank you for choosing Allianz PNB Life as your insurance partner. Have a good day ahead!"
 
     Always end the call gracefully and professionally.
