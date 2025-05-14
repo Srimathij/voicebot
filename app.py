@@ -768,7 +768,8 @@ def chatbot_res():
         'hang up',
         'nothing',
         'thank you',
-        'thanks'
+        'thanks',
+        'no thanks'
     ]
 
     # If user said any exit keyword, say goodbye and hang up immediately
@@ -801,6 +802,11 @@ def chatbot_res():
         🔊 Examples:
         - "allianz_score" → "Allianz Score"
         - "wealth_accumulator" → "Wealth Accumulator"
+    
+        
+    🧩 VOICE PRONUNCIATION INSTRUCTIONS:
+        - Speak naturally, with a calm, respectful, and warm tone.
+        - Ensure smooth phrasing and emphasize important words clearly.
 
 
     🧩 CURRENCY PRONUNCIATION:
@@ -869,11 +875,14 @@ def chatbot_res():
     - Repeat:
         "It’s www.touch.allianzpnblife.ph. Reminder to use the email address you provided during your policy application."
 
-    🧩 CLOSING THE CALL:
+    🧩 END-OF-CALL DETECTION:
 
-    If user expresses thanks , bye , ending the call or confirms action:
-    - Respond:
-        "My pleasure speaking with you, Mr./Ms. {name}. For other concerns, feel free to reach out to us via email at customercare@allianzpnblife.ph or call us at 8818-4357.
+    - If user clearly wants to end the call (e.g., says "no", "no thanks", "nothing", etc. when asked if they want more info):
+        → "My pleasure speaking with you, Mr./Ms. {name}. For other concerns, feel free to reach out to us via email at customercare@allianzpnblife.ph or call us at 8818-4357.  
+        Thank you for choosing Allianz PNB Life as your insurance partner. Have a good day ahead!"
+
+    - If user says thank you, goodbye, or confirms completion:
+        → "My pleasure speaking with you, Mr./Ms. {name}. For other concerns, feel free to reach out to us via email at customercare@allianzpnblife.ph or call us at 8818-4357.  
         Thank you for choosing Allianz PNB Life as your insurance partner. Have a good day ahead!"
 
     Always end the call gracefully and professionally.
@@ -906,7 +915,7 @@ def chatbot_res():
     completion = client_ai.chat.completions.create(
         model="gpt-4o",
         messages=truncate_history(history),
-        temperature=1,
+        temperature=0.7,
         max_tokens=1024,
     )
 
