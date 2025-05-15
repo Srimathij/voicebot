@@ -51,6 +51,7 @@ twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
 MAX_HISTORY_TOKENS = 9000
 # call_log = []
 
+from datetime import datetime, timezone
 
 import os
 import json
@@ -133,7 +134,7 @@ def trigger_call():
         # 🔥 Record it in call_log for later reporting/transcript lookup
         call_log.append({
             "sid":          call.sid,
-            "timestamp":    datetime.now().isoformat(),
+            "timestamp":    datetime.now(timezone.utc).isoformat(),
             "name":         name,
             "plan":         plan,
             "due_date":     due_date,
@@ -630,39 +631,37 @@ def call_status():
     return ('', 204)
 
 
+from datetime import datetime, timezone
 
 @app.route('/call-stats', methods=['GET'])
 def call_stats():
-    
-    today = datetime.now().date()
- 
-    # only calls triggered today
+    today = datetime.now(timezone.utc).date()  # Use UTC to match stored timestamps
+
+    # Filter calls triggered today (by UTC date)
     today_calls = [
         c for c in call_log
         if datetime.fromisoformat(c["timestamp"]).date() == today
     ]
- 
+
     total = len(today_calls)
 
-    # “successful” — we have a recordingUrl (i.e. bot spoke & recorded)
+    # Successful calls are those that have a recording URL
     success_count = sum(1 for c in today_calls if c.get("recordingUrl"))
 
-    # everything else is “failed”
+    # Failed calls are the rest
     success_count = total - success_count
 
-    # average duration of those that did record
-    durations   = [c.get("duration", 0) for c in today_calls if c.get("duration")]
-    avg_secs    = int(sum(durations)/len(durations)) if durations else 0
-    avg_duration = f"{avg_secs//60}:{avg_secs%60:02d}"
+    # Calculate average duration (only for successful/recorded calls)
+    durations = [c.get("duration", 0) for c in today_calls if c.get("duration")]
+    avg_secs = int(sum(durations) / len(durations)) if durations else 0
+    avg_duration = f"{avg_secs // 60}:{avg_secs % 60:02d}"
 
     return jsonify({
-        "today":      total,
+        "today": total,
         "successful": success_count,
-        "failed":     0,
-        "duration":   avg_duration
+        "failed": 0,
+        "duration": avg_duration
     })
-
- 
  
 
 
@@ -716,7 +715,7 @@ def welcome():
         action='/openaires',
         input='speech',
         speech_model='phone_call',
-        speechTimeout=0.05,
+        speechTimeout=0.1,
         actionOnEmptyResult=True
     )
     response.append(gather)
@@ -736,7 +735,7 @@ def fallback():
         response.hangup()
     else:
         gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                        speechTimeout=0.05, actionOnEmptyResult=True)
+                        speechTimeout=0.1, actionOnEmptyResult=True)
         response.append(gather)
     return str(response)
 
@@ -802,6 +801,22 @@ def chatbot_res():
         🔊 Examples:
         - "allianz_score" → "Allianz Score"
         - "wealth_accumulator" → "Wealth Accumulator"
+
+    
+    🧩 MISIDENTIFICATION HANDLING:
+    If the user says they are **not the intended person**, or says anything like:
+    ["not me", "wrong person", "i'm not that person", "you have the wrong number", "that's not me"]
+
+    → Respond:
+    "Sorry for the confusion. I won’t share any personal details. We’ll call back another time. Thank you for your time!"
+
+    → If user says similar phrases repeatedly, vary the response:
+    - "Apologies for the mix-up. We’ll try to reach the correct person later. Have a good day!"
+    - "Thank you for letting us know. No worries — we’ll follow up with the correct contact another time."
+
+    → **Never mention the user's name, plan, or policy information** in any "wrong person" scenario.
+
+
     
         
     🧩 VOICE PRONUNCIATION INSTRUCTIONS:
@@ -925,7 +940,7 @@ def chatbot_res():
 
     response.say(reply)
     gather = Gather(action='/openaires', input='speech', speech_model='phone_call',
-                    speechTimeout=0.05, actionOnEmptyResult=True)
+                    speechTimeout=0.1, actionOnEmptyResult=True)
     response.append(gather)
     return str(response)
 
