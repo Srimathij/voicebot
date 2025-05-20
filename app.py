@@ -409,7 +409,7 @@ def transcribe_audio(filepath):
         with open(filepath, "rb") as f:
             resp = client.audio.transcriptions.create(
                 file=(filename, f.read()),
-                model="whisper-large-v3",
+                model="whisper-large-v3-turbo",
                 response_format="verbose_json"
             )
         return resp
@@ -730,7 +730,7 @@ def welcome():
 def fallback():
     response = VoiceResponse()
     session['fallback_count'] += 1
-    if session['fallback_count'] >= 80:
+    if session['fallback_count'] >= 100:
         response.say("We're unable to hear you. We'll try again later. Goodbye.")
         response.hangup()
     else:
@@ -793,7 +793,21 @@ def chatbot_res():
     🧩 IMPORTANT FORMAT NOTE:
         When reading out policy numbers (or any numeric code), say each digit individually.  
         For example, “5678” should be spoken as “five, six, seven, eight.”
-    
+
+    🧩 NAME PRONUNCIATION RULES:
+
+    - Always pronounce names as **whole names**, never letter-by-letter unless the user spells it themselves.
+    - Avoid interpreting alphabetic names (e.g., "Christiane") as acronyms. Do not say: “C-H-R-I-S-T-I-A-N-E”.
+    - Speak names naturally and smoothly, preserving respectful intonation.
+
+        🔊 Examples:
+        - “Christiane” → say “Chris-tee-ahn” (not “C-H-R-I-S-T-I-A-N-E”)
+        - “Joaquin” → say “Wah-keen”
+        - “Ma. Theresa” → say “Ma Theresa” as “Mah Teh-reh-sah”
+        - “Juan_Dela_Cruz” → convert to “Juan Dela Cruz” using:
+            spoken_name = name.replace("_", " ")
+
+        
     🧩 DATA FORMATTING (APPLY BEFORE SPEAKING):
     - Format plan name to avoid underscores and ensure natural speech:
         spoken_plan_name = plan_name.replace("_", " ").title()
