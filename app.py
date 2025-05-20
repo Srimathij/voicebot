@@ -715,7 +715,7 @@ def welcome():
         action='/openaires',
         input='speech',
         speech_model='phone_call',
-        speechTimeout=0.1,
+        speechTimeout=3,
         actionOnEmptyResult=True
     )
     response.append(gather)
