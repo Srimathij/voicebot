@@ -117,7 +117,7 @@ def trigger_call():
         "last_4_digit":   last_4,
         "currency":       currency
     })
-    voicebot_url = f"https://7c0b-157-51-51-91.ngrok-free.app/voicebot?{query}"
+    voicebot_url = f"https://alliance-q1m5.onrender.com/voicebot?{query}"
 
     try:
         call = twilio_client.calls.create(
